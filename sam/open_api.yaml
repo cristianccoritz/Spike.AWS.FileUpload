@@ -1,0 +1,109 @@
+openapi: 3.0.3
+info:
+  title: Spike File Upload API
+  description: API of File Upload Spike
+  version: v1.0
+x-amazon-apigateway-binary-media-types:
+  - "multipart/form-data"
+  - "application/octet-stream"
+  - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  - "application/vnd.ms-excel"
+paths:
+  /api/oid/fileupload:
+    post:
+      summary: Upload file with Custom Authorizer
+      description: Upload excel or csv file with Custom Authorizer
+      requestBody:
+        description: Excel file to upload
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Excel file to upload (e.g., .xlsx)
+      responses:
+        "200":
+          description: "DNC List was successfully saved"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileUploadResponse'
+        "400":
+          description: "Missing uploaded file / Invalid client credentials"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BadRequestResponse'
+        "500":
+          description: "Exception message"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMessage'
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FileUploadFunction.Arn}/invocations
+        responses:
+          default:
+            statusCode: "200"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        type: "aws_proxy"
+      security:
+      - OpenIdAuthorizer: []
+
+components:
+  schemas:
+    MailAddress:
+      type: object
+      properties:
+        street1:
+          type: string
+          example: "2200 Fletcher Avenue"
+        street2:
+          type: string
+          example: "4th floor"
+        city:
+          type: string
+          example: "FORT LEE"
+        state:
+          type: string
+          example: "NJ"
+        zipCode:
+          type: string
+          example: "07024"
+    FileUploadResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        channel:
+          type: string
+        dncLists:
+          type: string
+        notes:
+          type: string
+        mailAddressList:
+          type: array
+          $ref: '#/components/schemas/MailAddress'
+    BadRequestResponse:
+      type: string
+    OkMessage:
+      type: string
+    ErrorMessage:
+      type: string
+
+securityDefinitions:
+  OpenIdAuthorizer:
+    type: "apiKey"
+    name: "Authorization"
+    in: "header"
+    x-amazon-apigateway-authtype: "custom"
+    x-amazon-apigateway-authorizer:
+      authorizerUri:
+        Fn::Sub: arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OpenIdAuthorizerFunction.Arn}/invocations
+      type: "token"

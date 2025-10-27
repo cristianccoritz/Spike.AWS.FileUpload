@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Spike for File Upload API
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: dotnet8
+    Architectures:
+      - x86_64
+    VpcConfig:
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      SubnetIds: !Ref Subnets
+    Tags:
+      Environment: !Ref Env
+      Department: Platform
+      Owner: CCU
+  Api:
+    OpenApiVersion: 3.0.3
+
+Parameters:
+  Env:
+    Type: String
+    Default: "dev"
+    Description: Environment
+  Vpc:
+    Type: String
+    Default: "vpc-0c0df94516a75badc"
+    Description: Tranzact Vpc
+  Subnets:
+    Type: CommaDelimitedList
+    Default: "subnet-047393c42d4664b81,subnet-0c4c898b0e4adc280,subnet-0c24c9e98b0280eb1"
+    Description: Tranzact Subnets
+  Version:
+    Type: String
+    Default: latest
+    Description: Application version (Octopus release number)
+  CorsUri:
+    Type: String
+    Default: "*"
+    Description: Cors Uri
+  AzureAppTenantId:
+    Type: String
+    Default: "7427676f-ed2e-4126-b3b1-06279ba31283"
+    Description: Contact Preferences Azure Application Tenant ID
+  AzureAppClientId:
+    Type: String
+    Default: "47333beb-a87a-4b54-905c-ebd5af14a27b"
+    Description: Contact Preferences Azure Application Client ID
+
+Mappings: 
+  EnvVariables:
+    AccountId:
+      dev: "025381531841"
+
+Resources:
+  SpikeFULambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+        - !Sub 
+          - 'arn:aws:iam::${AWSAccountId}:policy/dnc-policy'
+          - AWSAccountId: !FindInMap [EnvVariables, AccountId, !Ref Env]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+
+  SpikeFUApiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda security group
+      VpcId: !Ref Vpc
+
+  SpikeFUApiGateway:
+    Type: AWS::Serverless::Api
+    DependsOn: SpikeFUApiGatewayAccount
+    Properties:
+      StageName: Prod
+      BinaryMediaTypes:
+        - multipart/form-data
+        - application/octet-stream
+        - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+        - application/vnd.ms-excel
+      EndpointConfiguration:
+        Type: REGIONAL
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE'"
+        AllowHeaders: "'Content-Type,Authorization,source-key'"
+        AllowOrigin: !Sub "'${CorsUri}'"
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: open_api.yaml
+      AccessLogSetting:
+        DestinationArn: !GetAtt SpikeFUApiGatewayLog.Arn
+        Format: '{"requestId":"$context.requestId", "ip":"$context.identity.sourceIp", "caller":"$context.identity.caller", "user":"$context.identity.user", "requestTime":"$context.requestTime", "httpMethod":"$context.httpMethod", "resourcePath":"$context.resourcePath", "status":"$context.status", "protocol":"$context.protocol", "responseLength":"$context.responseLength", "errorMessage":"$context.error.message", "traceId":"$context.xrayTraceId"}'
+      Auth:
+        Authorizers:
+          OpenIdAuthorizer:
+            FunctionArn: !GetAtt OpenIdAuthorizerFunction.Arn
+
+  SpikeFUApiGatewayLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/api-gateway/${AWS::StackName}-SpikeFUApiGateway"
+      RetentionInDays: 30
+
+  SpikeFUApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties: 
+      CloudWatchRoleArn: !GetAtt SpikeFUApiGatewayRole.Arn
+
+  OpenIdAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: Spike.AWS.FileUpload.Authorizer::Spike.AWS.FileUpload.Authorizer.OpenIdAuthorizerFunction::FunctionHandler
+      CodeUri: ../src/Spike.AWS.FileUpload.Authorizer/
+      Role: !GetAtt SpikeFULambdaRole.Arn
+      Environment:
+        Variables:
+          APP_VERSION: !Ref Version
+          openIdAuth__tenantId: !Ref AzureAppTenantId
+          openIdAuth__clientId: !Ref AzureAppClientId
+      LoggingConfig:
+        LogGroup: !Ref OpenIdAuthorizerFunctionLogGroup
+
+  FileUploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: Spike.AWS.FileUpload.API::Spike.AWS.FileUpload.API.FileUploadFunction::FunctionHandler
+      CodeUri: ../src/Spike.AWS.FileUpload.API/
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Ref Subnets
+      Environment:
+        Variables:
+          APP_VERSION: !Ref Version
+          CORS_URI: !Ref CorsUri
+      Role: !GetAtt SpikeFULambdaRole.Arn
+      Events:
+        OpenIdAuthorization:
+          Type: Api
+          Properties:
+            Path: /api/oid/fileupload
+            Method: post
+            RestApiId: !Ref SpikeFUApiGateway
+            Auth:
+              Authorizer: OpenIdAuthorizer
+      LoggingConfig:
+        LogGroup: !Ref FileUploadFunctionLogGroup
+
+  OpenIdAuthorizerFunctionLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-OpenIdAuthorizerFunction"
+        RetentionInDays: 180
+
+  FileUploadFunctionLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-FileUploadFunction"
+        RetentionInDays: 180
+
+Outputs:
+  CanIContactApi:
+    Description: "API Gateway endpoint URL for Prod stage for Spike File Upload API"
+    Value: !Sub "https://${SpikeFUApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

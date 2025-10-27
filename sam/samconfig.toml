@@ -1,0 +1,9 @@
+version = 0.1
+[default.deploy.parameters]
+stack_name = "spike-fu-app"
+resolve_s3 = true
+s3_prefix = "spike-fu-app"
+region = "us-east-2"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Env=\"dev\" Vpc=\"vpc-0c0df94516a75badc\" Subnets=\"subnet-047393c42d4664b81,subnet-0c4c898b0e4adc280,subnet-0c24c9e98b0280eb1\" Version=\"latest\" CorsUri=\"*\" AzureAppTenantId=\"7427676f-ed2e-4126-b3b1-06279ba31283\" AzureAppClientId=\"47333beb-a87a-4b54-905c-ebd5af14a27b\""
+image_repositories = []
